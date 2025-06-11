@@ -1,5 +1,3 @@
-# README.md
-
 ## Radar Signal Deinterleaving Dataset Generation
 
 This repository contains MATLAB code for generating a comprehensive, labeled dataset intended for Radar Signal Deinterleaving (RSD) tasks. The dataset simulates the reception of radar pulse signals at a Radar Warning Receiver (RWR) onboard an aircraft flying along multiple predefined trajectories. The received signals are generated as combinations of multiple ground-based radar emitters transmitting different pulse waveforms.
