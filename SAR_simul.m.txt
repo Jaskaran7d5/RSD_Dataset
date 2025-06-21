@@ -1,0 +1,119 @@
+clc; clear; close all;
+
+%% 1. Scenario and Radar Parameters
+scene = radarScenario('UpdateRate', 200, 'IsEarthCentered', false, 'StopTime', 0.2);
+
+initPos = [0, 0, 1000];
+velocity = [0, 100, 0];
+traj = kinematicTrajectory('Position', initPos, 'Velocity', velocity);
+rdrplat = platform(scene, 'Trajectory', traj);
+
+bw = 10e6;        % 10 MHz
+fs = 20e6;        % 20 MHz (lowered)
+tpd = 2e-6;       % 2 us
+prf = 200;        % 200 Hz (lowered)
+maxRange = 1000;  % 1 km (lowered)
+
+rdr = radarTransceiver('MountingAngles', [0 0 0], 'NumRepetitions', 1, ...
+    'RangeLimits', [0 maxRange]);
+rdr.Waveform = phased.LinearFMWaveform('SampleRate', fs, 'PulseWidth', tpd, ...
+    'PRF', prf, 'SweepBandwidth', bw);
+rdr.Receiver.SampleRate = rdr.Waveform.SampleRate;
+rdrplat.Sensors = rdr;
+
+%% 2. Generate Terrain (smaller grid)
+xLimits = [900 1100];
+yLimits = [-100 100];
+[x, y, A] = helperRandomTerrainGenerator(1.75, 0, 100, xLimits(1), xLimits(2), yLimits(1), yLimits(2), 6);
+A(A < 0) = 0;
+xvec = x(1,:);
+yvec = y(:,1);
+
+%% 3. Add a Ground Object
+objX = 1000; objY = 0;
+[~, idxX] = min(abs(xvec - objX));
+[~, idxY] = min(abs(yvec - objY));
+objZ = A(idxY, idxX) + 20;
+objectPos = [objX, objY, objZ];
+objectRCS = 20;
+
+objectPlat = platform(scene, ...
+    'Position', objectPos, ...
+    'Signatures', {rcsSignature('Pattern', objectRCS)});
+
+%% 4. Land Surface Reflectivity (unchanged)
+grazTable = 20:0.1:60;
+freqTable = [1e9 10e9];
+reflectivityLayers = zeros(numel(grazTable), numel(freqTable), 2);
+reflectivityLayers(:,:,1) = landreflectivity('Woods', grazTable, freqTable);
+reflectivityLayers(:,:,2) = landreflectivity('WoodedHills', grazTable, freqTable);
+reflectivityType = ones(size(A));
+reflectivityType(A > 100) = 2;
+reflectivityMap = surfaceReflectivity('Custom', 'Frequency', freqTable, ...
+    'GrazingAngle', grazTable, 'Reflectivity', reflectivityLayers, ...
+    'Speckle', 'Rayleigh');
+s = landSurface(scene, 'Terrain', A, 'Boundary', [xLimits; yLimits], ...
+    'RadarReflectivity', reflectivityMap, 'ReflectivityMap', reflectivityType);
+
+%% 5. Generate SAR Raw Data (with smaller arrays)
+clutterGenerator(scene, rdr, 'Resolution', 5, 'RangeLimit', maxRange);
+minSample = 100;
+truncRngSamp = ceil(range2time(maxRange) * fs);
+T = 1 / prf;
+numPulses = round(scene.StopTime / T);
+raw = zeros(truncRngSamp - minSample + 1, numPulses);
+
+ii = 1;
+while advance(scene)
+    tmp = receive(scene);
+    raw(:, ii) = tmp{1}(minSample:truncRngSamp);
+    ii = ii + 1;
+    if ii > numPulses, break; end
+end
+
+%% 6. SAR Image Formation
+rdrhgt = initPos(3);
+rc = sqrt((rdrhgt - objZ)^2 + (objX)^2);
+v = norm(velocity);
+freq = 1e9;
+
+slcimg = rangeMigrationLFM(raw, rdr.Waveform, freq, v, rc);
+
+%% 7. Display SAR Image
+% --- SAR Image Enhancement Example ---
+
+% 1. Logarithmic scaling for dynamic range compression
+log_img = 20*log10(abs(slcimg));
+
+% 2. Adaptive histogram equalization for local contrast
+log_img_norm = mat2gray(log_img); % Normalize to [0,1]
+img_eq = adapthisteq(log_img_norm);
+
+% 3. Speckle reduction (median filter)
+img_filt = medfilt2(img_eq, [3 3]);
+
+% 4. Display enhanced image
+figure;
+imagesc(img_filt); colormap gray; axis image;
+title('Enhanced SAR Image');
+colorbar;
+
+
+%% --- Helper Function ---
+function [x, y, terrain] = helperRandomTerrainGenerator(f, initialHeight, initialPerturb, minX, maxX, minY, maxY, numIter)
+    dX = (maxX - minX) / 2;
+    dY = (maxY - minY) / 2;
+    [x, y] = meshgrid(minX:dX:maxX, minY:dY:maxY);
+    terrain = ones(3,3) * initialHeight;
+    perturb = initialPerturb;
+    for ii = 2:numIter
+        perturb = perturb / f;
+        oldX = x; oldY = y;
+        dX = (maxX - minX) / 2^ii;
+        dY = (maxY - minY) / 2^ii;
+        [x, y] = meshgrid(minX:dX:maxX, minY:dY:maxY);
+        terrain = griddata(oldX, oldY, terrain, x, y);
+        terrain = terrain + perturb * randn(1 + 2^ii, 1 + 2^ii);
+        terrain(terrain < 0) = 0;
+    end
+end
