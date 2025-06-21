@@ -1,0 +1,90 @@
+% --- SAR Simulation: Constant-Height Flight with an Object ---
+
+clc; clear; close all;
+
+%% 1. Scenario and Radar Parameters
+scene = radarScenario('UpdateRate', 500, 'IsEarthCentered', false, 'StopTime', 20);
+
+% SAR platform trajectory (constant height and velocity)
+initPos = [0, 0, 1000];      % (x, y, z) in meters
+velocity = [150, 0, 0];      % 150 m/s along x-axis
+traj = kinematicTrajectory('Position', initPos, 'Velocity', velocity);
+
+% Add SAR platform
+rdrplat = platform(scene, 'Trajectory', traj);
+
+% Radar sensor configuration
+rdr = radarTransceiver('MountingAngles', [0 0 0], 'NumRepetitions', 1, 'RangeLimits', [0 2500]);
+rdr.Waveform = phased.LinearFMWaveform('SampleRate', 60e6, 'PulseWidth', 3e-6, ...
+    'PRF', 500, 'SweepBandwidth', 30e6);
+rdrplat.Sensors = rdr;
+
+%% 2. Generate Terrain
+% Helper function must be in your path or working directory
+[x, y, A] = helperRandomTerrainGenerator(1.75, 0, 200, 900, 1200, -200, 200, 8);
+A(A < 0) = 0; % Set negative elevations to zero
+
+%% 3. Add an Object Above Terrain
+objX = 1100; objY = 0;
+[~, idxX] = min(abs(x(1,:) - objX));
+[~, idxY] = min(abs(y(:,1) - objY));
+objZ = A(idxY, idxX) + 30; % 30 meters above local terrain
+objectPos = [objX, objY, objZ];
+objectRCS = 20; % dBsm (high RCS for visibility)
+
+objectPlat = platform(scene, ...
+    'Position', objectPos, ...
+    'Signatures', {rcsSignature('Pattern', objectRCS)});
+
+%% 4. (Optional) Visualize Scene Layout
+figure;
+surf(x, y, A, 'EdgeColor', 'none'); hold on;
+plot3(initPos(1), initPos(2), initPos(3), 'ro', 'MarkerSize', 8, 'LineWidth', 2);
+plot3(objX, objY, objZ, 'b*', 'MarkerSize', 10, 'LineWidth', 2);
+legend('Terrain', 'SAR Start', 'Object');
+xlabel('X (m)'); ylabel('Y (m)'); zlabel('Z (m)');
+title('SAR Scene Layout');
+view(3); grid on;
+
+%% 5. Simulate SAR Data Collection (Pseudocode/Outline)
+% In a full implementation, you would loop over time, move the platform,
+% transmit pulses, and collect echoes. For brevity, this is outlined:
+
+% Example: Preallocate raw data (for demonstration)
+numPulses = 500; numRanges = 1024;
+raw = zeros(numRanges, numPulses); % Replace with actual data collection
+
+% (In a real scenario, use receive(scene) or similar in a loop to fill 'raw')
+
+%% 6. SAR Image Formation (Range Migration Algorithm)
+% You need to define rc (slant range to scene center)
+rc = initPos(3); % Platform altitude (since flying at constant height)
+
+% Only run this if you have actual raw data and the function available:
+% slcimg = rangeMigrationLFM(raw, rdr.Waveform, rdr.Waveform.SampleRate, norm(velocity), rc);
+
+% For demonstration, display a placeholder image
+figure;
+imagesc(abs(randn(numRanges, numPulses))); % Placeholder for SAR image
+colormap gray; axis image;
+title('Simulated SAR Image (placeholder)');
+
+%% --- Helper Function ---
+% Place this at the end of your script or in a separate file named helperRandomTerrainGenerator.m
+function [x, y, terrain] = helperRandomTerrainGenerator(f, initialHeight, initialPerturb, minX, maxX, minY, maxY, numIter)
+    dX = (maxX - minX) / 2;
+    dY = (maxY - minY) / 2;
+    [x, y] = meshgrid(minX:dX:maxX, minY:dY:maxY);
+    terrain = ones(3, 3) * initialHeight;
+    perturb = initialPerturb;
+    for ii = 2:numIter
+        perturb = perturb / f;
+        oldX = x; oldY = y;
+        dX = (maxX - minX) / 2^ii;
+        dY = (maxY - minY) / 2^ii;
+        [x, y] = meshgrid(minX:dX:maxX, minY:dY:maxY);
+        terrain = griddata(oldX, oldY, terrain, x, y);
+        terrain = terrain + perturb * randn(1 + 2^ii, 1 + 2^ii);
+        terrain(terrain < 0) = 0;
+    end
+end
